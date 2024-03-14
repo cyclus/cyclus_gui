@@ -1,0 +1,31 @@
+%A facility designed for integration tests that both provides and consumes commodities. It changes its request and offer amounts based on a power law with respect to time.
+
+KFacility {
+        % [String] commodity that the k-facility consumes
+    in_commod = 
+
+        % [String] recipe name for the k-facility's in-commodity
+    recipe_name = 
+
+        % [String] commodity that the k-facility supplies
+    out_commod = 
+
+        % [double] number of commodity units that can be taken at each timestep (infinite capacity can be represented by a very large number)
+    in_capacity = 
+
+        % [double] number of commodity units that can be supplied at each timestep (infinite capacity can be represented by a very large number)
+    out_capacity = 
+
+        % [double] number of output commodity units that can be supplied at the current time step (infinite capacity can be represented by a very large number )
+    current_capacity = 0
+
+        % [double] total maximum inventory size of the k-facility
+    max_inv_size = 1e+299
+
+        % [double] conversion factor that governs the behavior of the k-facility's input commodity capacity
+    k_factor_in = 
+
+        % [double] conversion factor that governs the behavior of the k-facility's output commodity capacity
+    k_factor_out = 
+
+}
