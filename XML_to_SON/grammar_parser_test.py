@@ -161,7 +161,7 @@ def process_element_mjson(node, parent_attrib={}):
     ele_dict[name] = attributes
     return ele_dict  
   
-file = os.path.dirname(__file__) + '\\m.json'
+file = os.path.dirname(__file__) + '\\m.json' # A sample file is being used currently. The file should be changed depending on the user/purpose.
 with open(file, 'r') as file:
     m_json = json.load(file) 
         
@@ -189,7 +189,7 @@ for spec in m_json["schema"]:
         processed_institutions.update(processed_and_wrapped)
         institutions.append(entity_name)
 
-tree = ET.parse('schema.xml')  
+tree = ET.parse('sample_schema.xml')  # A sample file is being used currently. The file should be changed depending on the user/purpose. 
 root = tree.getroot()
 ns = re.match(r'\{.*\}', root.tag).group(0) 
 simulation = root[0][0]  
@@ -323,7 +323,7 @@ def save_template_for_all_schemas(processed_schemas, annotations, folder_name = 
             file.write(template_string)
         print(f"Template for {key_name} saved as {filename}")
 
-
-save_template_for_all_schemas(processed_facilities, m_json["annotations"])
-save_template_for_all_schemas(processed_regions, m_json["annotations"])
-save_template_for_all_schemas(processed_institutions, m_json["annotations"])
+# These following lines create the templates and save them in a folder named "Templates"
+# save_template_for_all_schemas(processed_facilities, m_json["annotations"])
+# save_template_for_all_schemas(processed_regions, m_json["annotations"])
+# save_template_for_all_schemas(processed_institutions, m_json["annotations"])
