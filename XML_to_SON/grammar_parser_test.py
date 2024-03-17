@@ -3,34 +3,20 @@ import re
 import pprint
 import json
 import os.path
-
-conversion_dict = {
-    'string': 'String',
-    'nonNegativeInteger': 'Int',
-    'boolean': 'Boolean',
-    'double': 'double',
-    'positiveInteger': 'Int',
-    'float': 'Real',
-    'duration': 'Int',
-    'integer': 'Int',
-    'nonPositiveInteger': 'Int',
-    'negativeInteger': 'Int',
-    'long': 'Real',
-    'int': 'Int',
-    'token': 'String'
-}
+import argparse
 
 def get_element_type(node):
     for child in node:
-        if child.tag == f"{ns}data" and 'type' in child.attrib:
+        if child.tag.endswith("data") and "type" in child.attrib:
             xml_type = child.attrib['type']
-            json_type = conversion_dict.get(xml_type, 'Unknown')
-            return json_type
+            return conversion_dict.get(xml_type, 'Unknown')
     return None
 
-def process_element(node, parent_attrib={}):
+def process_element(node, parent_attrib=None):
+    if parent_attrib is None:
+        parent_attrib = {}
     ele_dict = {}
-    name = node.attrib['name']
+    name = node.attrib.get('name') 
     ele_dict[name] = {}
 
     if not parent_attrib:
@@ -42,39 +28,37 @@ def process_element(node, parent_attrib={}):
         ele_dict[name]['ValType'] = element_type
     else:
         for child in node:
-            if child.tag == f"{ns}text":
+            if child.tag.endswith("text"):
                 ele_dict[name]['ValType'] = "String"
                 break
 
     for child in node:
-        if child.tag == f"{ns}choice":
+        child_attrib = {}
+        if child.tag.endswith("choice"):
             choice_str = handle_choice_element(child)
             if choice_str:
                 ele_dict[name]['ChildExactlyOne'] = f"{choice_str}"
             break
-
-    ele_dict[name].update(parent_attrib)
-
-    for child in node:
-        child_attrib = {}
         if child.tag not in {f"{ns}zeroOrMore", f"{ns}oneOrMore", f"{ns}optional"}:
             child_attrib = {'minOccurs': 1, 'maxOccurs': 1}
         ele_dict[name].update(process_node(child, child_attrib))
 
+    ele_dict[name].update(parent_attrib)
+
     return ele_dict
 
 def process_node(node, add_attrib={}):
+            
     node_dict = {}
-
-    if node.tag == ns + "element":
+    if node.tag.endswith("element"):
         node_dict.update(process_element(node, add_attrib))
-    elif node.tag == ns + "optional":
+    elif node.tag.endswith("optional"):
         for child in node:
             node_dict.update(process_node(child, {'minOccurs': 0, 'maxOccurs': 1}))
-    elif node.tag == ns + "zeroOrMore":
+    elif node.tag.endswith("zeroOrMore"):
         for child in node:
             node_dict.update(process_node(child, {'minOccurs': 0}))
-    elif node.tag == ns + "oneOrMore":
+    elif node.tag.endswith("oneOrMore"):
         for child in node:
             node_dict.update(process_node(child, {'minOccurs': 1}))
     else:
@@ -126,77 +110,9 @@ def handle_choice_element(node):
 
 def process_schema_from_mjson(xml_string, element_name):
     root = ET.fromstring(xml_string)
-    processed_content = process_node_mjson(root)
-    wrapped_content = {element_name: processed_content}
+    processed_content = process_node(root)
     
-    return wrapped_content
-
-def process_node_mjson(node, add_attrib={}):
-    node_dict = {}
-    if node.tag.endswith("element"):
-        node_dict.update(process_element_mjson(node, add_attrib))
-    else:
-        for child in node:
-            node_dict.update(process_node_mjson(child, add_attrib))
-
-    return node_dict
-
-def process_element_mjson(node, parent_attrib={}):
-    ele_dict = {}
-    name = node.attrib.get('name', 'UnnamedElement')
-    
-    attributes = {"minOccurs": "1", "maxOccurs": "1"} # Works still needs to be done to process "optional elements"
-
-    type_attr = node.attrib.get('type')
-    if type_attr and type_attr in conversion_dict:
-        attributes['ValType'] = conversion_dict[type_attr]
-    else:
-        for child in node:
-            if child.tag.endswith("data") and 'type' in child.attrib:
-                xml_type = child.attrib['type']
-                json_type = conversion_dict.get(xml_type, 'Unknown')
-                attributes['ValType'] = json_type
-                break 
-
-    ele_dict[name] = attributes
-    return ele_dict  
-  
-file = os.path.dirname(__file__) + '\\m.json' # A sample file is being used currently. The file should be changed depending on the user/purpose.
-with open(file, 'r') as file:
-    m_json = json.load(file) 
-        
-processed_facilities = {}
-processed_regions = {}
-processed_institutions = {}
-
-facilities = []
-regions = []
-institutions = []
-
-for spec in m_json["schema"]:
-    element_name = spec.split(":")[-1]  
-    xml_content = m_json["schema"][spec]
-    entity_type = m_json["annotations"][spec]["entity"]
-    entity_name = spec.split(":")[-1]
-    processed_and_wrapped = process_schema_from_mjson(xml_content, element_name)
-    if entity_type == "facility":
-        processed_facilities.update(processed_and_wrapped)
-        facilities.append(entity_name)
-    elif entity_type == "region":
-        processed_regions.update(processed_and_wrapped)
-        regions.append(entity_name)
-    elif entity_type == "institution":
-        processed_institutions.update(processed_and_wrapped)
-        institutions.append(entity_name)
-
-tree = ET.parse('sample_schema.xml')  # A sample file is being used currently. The file should be changed depending on the user/purpose. 
-root = tree.getroot()
-ns = re.match(r'\{.*\}', root.tag).group(0) 
-simulation = root[0][0]  
-
-result = process_node(simulation)
-
-final_result = {"simulation": result["simulation"]}
+    return {element_name: processed_content}
 
 def integrate_detailed_schemas(final_json, processed_facilities, processed_regions, processed_institutions):
     for facility_name, facility_config in processed_facilities.items():
@@ -218,11 +134,6 @@ def integrate_detailed_schemas(final_json, processed_facilities, processed_regio
             final_json["simulation"]["region"]["institution"]["config"][institution_name] = new_institution_config
 
     return final_json
-
-final_result = integrate_detailed_schemas(final_result, processed_facilities, processed_regions, processed_institutions)
-
-with open("sample_schema_product.json", "w") as outfile:
-    json.dump(final_result, outfile, indent=4)
 
 def custom_format(value):
     val_str = json.dumps(value)
@@ -248,12 +159,6 @@ def custom_serialize(obj, key_name="simulation", indent=0):
     lines.append(f"{base_indent}}}")
 
     return "\n".join(lines)
-
-serialized_string = custom_serialize(final_result["simulation"])
-
-sch_file_path = "cyclus.sch"
-with open(sch_file_path, "w") as sch_file:
-    sch_file.write(serialized_string)
 
 def custom_serialize_for_template(obj, annotations, key_name, indent=0):
     lines = []
@@ -322,6 +227,77 @@ def save_template_for_all_schemas(processed_schemas, annotations, folder_name = 
         with open(filename, "w") as file:
             file.write(template_string)
         print(f"Template for {key_name} saved as {filename}")
+
+if __name__ == "__main__":    
+    parser = argparse.ArgumentParser(description='Process an XML schema file and a corresponding JSON file, and output to a specified file.')
+    parser.add_argument('--xml', type=str, required=True, help='The path to the XML schema file.')
+    parser.add_argument('--json', type=str, required=True, help='The path to the JSON file.')
+    parser.add_argument('--output', type=str, required=True, help='The path for the output file.')
+    args = parser.parse_args()
+    
+    tree = ET.parse(args.xml)  
+    root = tree.getroot()
+    ns = re.match(r'\{.*\}', root.tag).group(0) 
+    simulation = root[0][0]
+    
+    conversion_dict = {
+        'string': 'String',
+        'nonNegativeInteger': 'Int',
+        'boolean': 'Boolean',
+        'double': 'double',
+        'positiveInteger': 'Int',
+        'float': 'Real',
+        'duration': 'Int',
+        'integer': 'Int',
+        'nonPositiveInteger': 'Int',
+        'negativeInteger': 'Int',
+        'long': 'Real',
+        'int': 'Int',
+        'token': 'String'
+    }
+      
+    with open(args.json, 'r') as file:
+        m_json = json.load(file) 
+        
+    processed_facilities = {}
+    processed_regions = {}
+    processed_institutions = {}
+
+    facilities = []
+    regions = []
+    institutions = []
+
+    for spec in m_json["schema"]:
+        element_name = spec.split(":")[-1]  
+        xml_content = m_json["schema"][spec]
+        entity_type = m_json["annotations"][spec]["entity"]
+        entity_name = spec.split(":")[-1]
+        processed_and_wrapped = process_schema_from_mjson(xml_content, element_name)
+        if entity_type == "facility":
+            processed_facilities.update(processed_and_wrapped)
+            facilities.append(entity_name)
+        elif entity_type == "region":
+            processed_regions.update(processed_and_wrapped)
+            regions.append(entity_name)
+        elif entity_type == "institution":
+            processed_institutions.update(processed_and_wrapped)
+            institutions.append(entity_name)  
+
+    result = process_node(simulation)
+
+    final_result = {"simulation": result["simulation"]}
+    
+    final_result_detailed_schemas = integrate_detailed_schemas(final_result, processed_facilities, processed_regions, processed_institutions)
+
+    # Intermediate file created to track parsing progress. 
+    # with open("sample_schema_product.json", "w") as outfile:
+    #     json.dump(final_result_detailed_schemas, outfile, indent=4)
+        
+    serialized_string = custom_serialize(final_result_detailed_schemas["simulation"])
+
+    
+    with open(args.output, "w") as sch_file:
+        sch_file.write(serialized_string)
 
 # These following lines create the templates and save them in a folder named "Templates"
 # save_template_for_all_schemas(processed_facilities, m_json["annotations"])
