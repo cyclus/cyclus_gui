@@ -1,9 +1,10 @@
 import xml.etree.ElementTree as ET
 import re
-import pprint
 import json
 import os.path
 import argparse
+import re
+import os
 
 processed_facilities = {}
 processed_regions = {}
@@ -12,6 +13,80 @@ processed_institutions = {}
 facilities = []
 regions = []
 institutions = []
+highlighter_items = ['simulation', ' control ', ' archetypes ',' facility ', ' region ', ' recipe ']
+
+class highlighter:
+    def __init__(self):
+        self.rgb_dict = {'black': [0,0,0],
+                         'white': [255, 255, 255],
+                         'red': [255, 0, 0],
+                         'lime': [0, 255, 0],
+                         'blue': [0, 0, 255],
+                         'yellow': [255, 255, 0],
+                         'cyan': [0, 255, 255],
+                         'magenta': [255, 0, 255],
+                         'silver': [192, 192, 192]}
+        self.highlight_str = self.make_basic_son() 
+
+    def highlight_maker(self, name, word, color='blue'):
+        s = f"""rule("{name}") {{
+pattern = "{word}"
+bold = true
+foreground {{
+    red = {self.rgb_dict[color][0]}
+    green = {self.rgb_dict[color][1]}
+    blue = {self.rgb_dict[color][2]}
+}}
+}}
+
+        """
+        return s
+    
+    def make_basic_son(self):
+        highlight_str = ''
+        for i in highlighter_items:
+            highlight_str += self.highlight_maker(i, i)
+        # highlight_str += highlight_maker('brack_open', '{', 'red')
+        # highlight_str += highlight_maker('brack_close', '}', 'red')
+        # highlight_str += highlight_maker('square_open', '[', 'lime')
+        # highlight_str += highlight_maker('square_close', ']', 'lime')
+        highlight_str += '''rule("Quoted string") {
+pattern = """'[^']*'|"[^"]*""""
+bold = true
+foreground {
+    red = 255
+    green = 130
+    blue = 0
+    }
+background {
+    red = 255
+    green = 130
+    blue = 0
+    alpha = 25
+    }
+}
+
+rule("equal"){
+pattern="="
+background{
+    red=192
+    green=192
+    blue=192
+    }
+}
+
+rule("Comment") {
+    pattern = "%.*"
+    italic = true
+    foreground {
+        red = 0
+        green = 128
+        blue = 0
+    }
+}
+
+'''
+        return highlight_str
 
 def get_element_type(node):
     
@@ -61,7 +136,7 @@ def process_element(node, parent_attrib={}):
         if child.tag.endswith("choice"):
             choice_str, processed_choices = handle_choice_element(child)
             if choice_str:
-                ele_dict[formatted_name]['ChildExactlyOne'] = f"{choice_str}"
+                ele_dict[formatted_name]['ChildAtMostOne'] = f"{choice_str}"
                 ele_dict[formatted_name].update(processed_choices)
             break
         if child.tag not in {f"{ns}zeroOrMore", f"{ns}oneOrMore", f"{ns}optional"}:
@@ -101,7 +176,7 @@ def generate_child_exactly_one_line(entity_type):
         options = institutions
     else:
         options = []
-    return f"ChildExactlyOne=[{'|'.join(options)}]"
+    return f"ChildAtMostOne=[{'|'.join(options)}]"
 
 def handle_choice_element(node):
     choices = []
@@ -114,19 +189,15 @@ def handle_choice_element(node):
             processed_choices.update(process_node(child, {}))
     
     if node.text:
-        processed_schemas = None
         if '@Facility_REFS@' in node.text:
-            processed_schemas = processed_facilities
             replacement_text = generate_child_exactly_one_line('facility')
             node.text = node.text.replace('@Facility_REFS@', replacement_text)
             return f"[{' '.join(facilities)}]", {}
         elif '@Region_REFS@' in node.text:
-            processed_schemas = processed_regions
             replacement_text = generate_child_exactly_one_line('region')
             node.text = node.text.replace('@Region_REFS@', replacement_text)
             return f"[{' '.join(regions)}]", {}
         elif '@Inst_REFS@' in node.text:
-            processed_schemas = processed_institutions
             replacement_text = generate_child_exactly_one_line('institution')
             node.text = node.text.replace('@Inst_REFS@', replacement_text)
             return f"[{' '.join(institutions)}]", {}
@@ -137,27 +208,44 @@ def handle_choice_element(node):
 def process_schema_from_mjson(xml_string, element_name):
     root = ET.fromstring(xml_string)
     processed_content = process_node(root)
-    
     return {element_name: processed_content}
 
 def integrate_detailed_schemas(final_json, processed_facilities, processed_regions, processed_institutions):
     for facility_name, facility_config in processed_facilities.items():
-        if "facility" in final_json["simulation"] and facility_name in final_json["simulation"]["facility"]["config"]["ChildExactlyOne"]:
-            new_facility_config = {"InputTmpl": '"'+facility_name+'"'}
+        if "facility" in final_json["simulation"] and facility_name in final_json["simulation"]["facility"]["config"]["ChildAtMostOne"]:
+            new_facility_config = {
+                "InputTmpl": '"' + facility_name + '"',  
+                "MaxOccurs": 1                          
+            }
             new_facility_config.update(facility_config)
             final_json["simulation"]["facility"]["config"][facility_name] = new_facility_config
 
     for region_name, region_config in processed_regions.items():
-        if "region" in final_json["simulation"] and region_name in final_json["simulation"]["region"]["config"]["ChildExactlyOne"]:
-            new_region_config = {"InputTmpl": '"' + region_name + '"'}
+        if "region" in final_json["simulation"] and region_name in final_json["simulation"]["region"]["config"]["ChildAtMostOne"]:
+            new_region_config = {
+                "InputTmpl": '"' + region_name + '"',   
+                "MaxOccurs": 1                          
+            }
             new_region_config.update(region_config)
             final_json["simulation"]["region"]["config"][region_name] = new_region_config
 
     for institution_name, institution_config in processed_institutions.items():
-        if "region" in final_json["simulation"] and institution_name in final_json["simulation"]["region"]["institution"]["config"]["ChildExactlyOne"]:
-            new_institution_config = {"InputTmpl": '"' + institution_name + '"'}
+        if "region" in final_json["simulation"] and institution_name in final_json["simulation"]["region"]["institution"]["config"]["ChildAtMostOne"]:
+            new_institution_config = {
+                "InputTmpl": '"' + institution_name + '"',  
+                "MaxOccurs": 1                               
+            }
             new_institution_config.update(institution_config)
             final_json["simulation"]["region"]["institution"]["config"][institution_name] = new_institution_config
+
+    simulation_dict = final_json["simulation"]
+    simulation_dict["MinOccurs"] = 1
+    simulation_dict["MaxOccurs"] = 1
+
+    simulation_dict = add_child_at_least_one(simulation_dict)
+    simulation_dict = add_child_at_least_one_for_region(simulation_dict)
+
+    final_json["simulation"] = simulation_dict
 
     return final_json
 
@@ -186,18 +274,55 @@ def custom_serialize(obj, key_name="simulation", indent_size=0):
 
     return "\n".join(lines)
 
-def generate_doc_lines_for_key(key, value, annotations, annotation_key, doc_indent, child_indent):
-    lines = []
-    optional = "(optional)" if value.get("MinOccurs", "1") == "0" else ""
-    type_str = f"[{value.get('ValType', 'Unknown')}]"
-    var_doc = annotations[annotation_key].get('vars', {}).get(key, {}).get('doc', 'No documentation available')
-    doc_lines = [f'%{optional} {type_str} {line}' for line in var_doc.split('\n')]
+def resolve_reference(value, annotations):
+    # Currently working on this function and the following. 
+    # This function helps getting around the fact that elements like Mixer have variables set equal
+    # To a string ("in_streams": "streams_", in the metadata). Solution has not been found before this PR.  
+    while isinstance(value, str):
+        reference_key = value
+        if reference_key in annotations:
+            value = annotations[reference_key]
+            print(f"Resolved '{reference_key}' to: {value} (type: {type(value)})")
+        else:
+            print(f"Warning: Reference key '{reference_key}' not found in annotations.")
+            return None
 
+    if not isinstance(value, dict):
+        print(f"Warning: Expected dictionary after resolving references, but found {type(value).__name__}.")
+        return None
+    return value
+
+def generate_doc_lines_for_key(key, value, annotations, annotation_key, doc_indent, child_indent):
+    # Still in progress to work with nested structures
+    lines = []
+    
+    if isinstance(value, dict):
+        value = resolve_reference(value, annotations)
+    else:
+        lines.append(f"{child_indent}{key} =\n")
+        return lines
+
+    annotation_namespace = annotations.get(annotation_key, {})
+    var_info = annotation_namespace.get('vars', {}).get(key, {})
+    if not isinstance(var_info, dict):
+        var_info = {}
+
+    optional = " (optional)" if value.get("MinOccurs", 1) == 0 else ""
+    val_type = value.get('ValType', var_info.get('type', 'Unknown'))
+    type_str = f"[{val_type}]"
+    var_doc = var_info.get('doc', 'No documentation available')
+
+    doc_lines = [f'%{optional} {type_str} {line}' for line in var_doc.split('\n')]
     lines.extend([f"{doc_indent}{line}" for line in doc_lines])
 
-    default_val = annotations[annotation_key].get('vars', {}).get(key, {}).get('default', '')
-    default_str = " = " + (str(default_val) if default_val != '' else "")
-    lines.append(f"{child_indent}{key}{default_str}\n")
+    default_val = var_info.get('default', None)
+    default_str = f" = {default_val}" if default_val is not None else " ="
+
+    if 'val' in value:
+        lines.append(f"{child_indent}{key} {{val{default_str}}}\n")
+    else:
+        lines.append(f"{child_indent}{key}{default_str}\n")
+
     return lines
 
 def custom_serialize_for_template(obj, annotations, key_name):
@@ -205,41 +330,175 @@ def custom_serialize_for_template(obj, annotations, key_name):
     indent_size = 0
     tab = 4 * " "
     base_indent = indent_size * " "
-    doc_indent = base_indent + 2 * tab 
+    doc_indent = base_indent + 2 * tab
     child_indent = base_indent + tab
 
-    matching_keys = [key for key in annotations.keys() if key.endswith(key_name)]
+    matching_keys = [key for key in annotations.keys() if key.split(":")[-2] == key_name.split("_")[-3] and key.split(":")[-1] == key_name.split("_")[-1]]
+    if not matching_keys:
+        print(f"DEBUG: No matching keys found for key_name: {key_name}")
+        print(f"DEBUG: Available keys in annotations: {list(annotations.keys())}")
+        return None
+
     annotation_key = matching_keys[0]
     
-    doc_string = annotations.get(annotation_key, {}).get('doc', 'No documentation available') #PENDING: work around streams_ in Mixer not being a dictionary.
+    doc_string = annotations.get(annotation_key, {}).get('doc', 'No documentation available')
     doc_lines = [f'% {line}' for line in doc_string.split('\n')] + ['']
     lines.extend(doc_lines)
     lines.append(f'{base_indent}{key_name} {{')
 
-    for key, value in obj.items():
-        lines.extend(generate_doc_lines_for_key(key, value, annotations, annotation_key, doc_indent, child_indent))
-
+    if annotation_key:
+        for key, value in obj.items():
+            lines.extend(generate_doc_lines_for_key(key, value, annotations, annotation_key, doc_indent, child_indent))
+    else:
+        print(f"No annotation key found for {key_name}")
+        
     lines.append(f'{base_indent}}}')
-    lines.append('') 
+    lines.append('')
 
     return "\n".join(lines)
 
-def save_template_for_all_schemas(processed_schemas, annotations, folder_name = "templates"):
-    os.makedirs(folder_name, exist_ok=True)
+def save_template_for_all_schemas(processed_schemas, annotations):
     for key_name, schema_contents in processed_schemas.items():
         template_string = custom_serialize_for_template(schema_contents, annotations, key_name)
-        filename = f"{folder_name}/{key_name}.tmpl"
-        with open(filename, "w") as file:
-            file.write(template_string)
-        print(f"Template for {key_name} saved as {filename}")
+        if template_string:
+            filename = f"{template_dir}/{key_name}.tmpl"
+            with open(filename, "w") as file:
+                file.write(template_string)
+        else:
+            print(f"Failed to generate template for {key_name}")
+            
+def add_child_at_least_one(simulation_dict):
+    attribute_keys = {"InputTmpl", "MinOccurs", "MaxOccurs"}
+    children_without_max_occurs_one = [
+        key for key, value in simulation_dict.items()
+        if key not in attribute_keys and not (isinstance(value, dict) and value.get("MaxOccurs") == 1)
+    ]
+    if children_without_max_occurs_one:
+        simulation_dict = {
+            "ChildAtLeastOne": f"[{' '.join(children_without_max_occurs_one)}]",
+            **simulation_dict
+        } 
+        for child_name in children_without_max_occurs_one:
+            if child_name in simulation_dict and isinstance(simulation_dict[child_name], dict):
+                simulation_dict[child_name]["InputTmpl"] = f'"{child_name}"'
+            else:
+                simulation_dict[child_name] = {"InputTmpl": f'"{child_name}"'}
+    
+    return simulation_dict
+
+def add_child_at_least_one_for_region(simulation_dict):
+    if "region" in simulation_dict:
+        region_dict = simulation_dict["region"]
+        region_dict["ChildAtLeastOne"] = "[institution]"
+
+        if "institution" not in region_dict:
+            region_dict["institution"] = {}
+        
+        region_dict["institution"]["InputTmpl"] = '"institution"'
+        simulation_dict["region"] = region_dict
+    
+    return simulation_dict
 
 def parse_arguments():
-    parser = argparse.ArgumentParser(description='Process an XML schema file and a corresponding JSON file, and output to a specified file.')
+    parser = argparse.ArgumentParser(description='Process an XML schema file, a corresponding JSON file, an output to a specified file, and a path leading to the rte directory.')
     parser.add_argument('--xml', type=str, required=True, help='The path to the XML schema file.')
     parser.add_argument('--json', type=str, required=True, help='The path to the JSON file.')
     parser.add_argument('--output', type=str, required=True, help='The path for the output file.')
+    parser.add_argument('--path', type=str, required=True, help='The path for the rte directory.')
     return parser.parse_args()
 
+def generate_cyclus_workbench_files(workbench_rte_dir, etc_dir, cyclus_cmd):
+    cyclus_dir = os.path.join(workbench_rte_dir, 'cyclus')
+    if not os.path.exists(cyclus_dir):
+        os.mkdir(cyclus_dir)
+
+    schema_path = os.path.join(cyclus_dir, args.output)
+    highlight_path = os.path.join(etc_dir, 'grammars', 'highlighters', 'cyclus.wbh')
+    grammar_path = os.path.join(etc_dir, 'grammars', 'cyclus.wbg')
+
+    grammar_str  = """name= Cyclus
+enabled = true
+
+parser = waspson
+schema = "%s"
+validator = wasp
+
+templates = "%s"
+
+highlighter = "%s"
+
+extensions = [cyclus]
+maxDepth = 10
+""" %(schema_path, template_dir, highlight_path)
+    
+    #grammar file
+    with open(grammar_path, 'w') as f:
+        f.write(grammar_str)
+    with open(schema_path.replace('.sch', '.wbg'), 'w') as f:
+        f.write(grammar_str)
+     
+    #schema file    
+    with open(schema_path, 'w') as f:
+        f.write(serialized_string)
+    
+    #templates    
+    if not os.path.exists(template_dir):
+        os.mkdir(template_dir)
+
+    #highliter file
+    h_ = highlighter()
+    with open(highlight_path, 'w') as f:
+        f.write(h_.highlight_str)
+    
+def create_template_for_node(node_name, node_content, template_dir="templates"):
+    template_name = node_name
+    template_path = os.path.join(template_dir, f"{template_name}.tmpl")
+    
+    if os.path.exists(template_path):
+        return
+    
+    template_content = generate_template_content(node_name, node_content)
+    with open(template_path, "w") as template_file:
+        template_file.write(template_content)
+    
+def generate_template_content(node_name, node_content, indent_level=0):
+    indent = "    " * indent_level
+    lines = [f"{indent}{node_name} {{"]
+
+    for key, value in node_content.items():
+        if key in {"MinOccurs", "MaxOccurs", "ValType", "InputTmpl"}:
+            continue
+
+        if isinstance(value, dict):
+            non_ignored_keys = [
+                k for k in value.keys() if k not in {"MinOccurs", "MaxOccurs", "ValType", "InputTmpl"}
+            ]
+            if not non_ignored_keys:
+                lines.append(f"{indent}    {key} = ")
+            else:
+                nested_content = generate_template_content(key, value, indent_level + 1)
+                lines.append(nested_content)
+        else:
+            lines.append(f"{indent}    {key} = ")
+
+    lines.append(f"{indent}}}")
+    
+    return "\n".join(lines)
+
+def create_templates_for_missing_nodes(final_json, template_dir="templates"):
+    os.makedirs(template_dir, exist_ok=True)
+    
+    child_at_least_one_line = final_json["simulation"].get("ChildAtLeastOne", "")
+    children = child_at_least_one_line.strip("[]").split()
+
+    for child_name in children:
+        if child_name in final_json["simulation"]:
+            node_content = final_json["simulation"][child_name]
+            create_template_for_node(child_name, node_content, template_dir) 
+        if (" " + child_name + " ") not in highlighter_items:
+            child_name_highlight = " " + child_name + " "
+            highlighter_items.append(child_name_highlight)  
+    
 if __name__ == "__main__":    
     args = parse_arguments()
     
@@ -252,20 +511,22 @@ if __name__ == "__main__":
         cyclus_metadata = json.load(file) 
 
     for spec in cyclus_metadata["schema"]:
-        element_name = spec.split(":")[-1]  
+        element_name = "_" + spec.split(":")[1] + "__" + spec.split(":")[2]
         xml_content = cyclus_metadata["schema"][spec]
         entity_type = cyclus_metadata["annotations"][spec]["entity"]
-        entity_name = spec.split(":")[-1]
         processed_and_wrapped = process_schema_from_mjson(xml_content, element_name)
         if entity_type == "facility":
             processed_facilities.update(processed_and_wrapped)
-            facilities.append(entity_name)
+            facilities.append(element_name)
+            highlighter_items.append(element_name)
         elif entity_type == "region":
             processed_regions.update(processed_and_wrapped)
-            regions.append(entity_name)
+            regions.append(element_name)
+            highlighter_items.append(element_name)
         elif entity_type == "institution":
             processed_institutions.update(processed_and_wrapped)
-            institutions.append(entity_name)  
+            institutions.append(element_name)  
+            highlighter_items.append(element_name)
 
     result = process_node(simulation)
 
@@ -275,11 +536,150 @@ if __name__ == "__main__":
     
     final_result_detailed_schemas = integrate_detailed_schemas(final_result, processed_facilities, processed_regions, processed_institutions)
         
-    serialized_string = custom_serialize(final_result_detailed_schemas["simulation"])
+    serialized_string = custom_serialize(final_result_detailed_schemas["simulation"])   
+        
+    cyclus_cmd = 'cyclus'
+    etc_dir = os.path.join(args.path, os.pardir, 'etc')
+    template_dir = os.path.join(etc_dir, 'Templates', 'cyclus')
+    create_templates_for_missing_nodes(final_result_detailed_schemas, template_dir)
+    
+    init_template_string= """simulation{
+
+    control {
+        duration = 1234
+        startmonth = 1
+        startyear = 2020
+        explicit_inventory=0
+        dt=2629846
+        decay="lazy"
+    }
+    
+    archetypes {
+        spec {
+            name = "archetype name"
+        }
+    }
+
+
+    facility {
+        name="facility_name"
+        config {
+                % autocomplete here
+                }     
+    }
+    
+    region {
+        name="region_name"
+        config {
+                % autocomplete here
+                }
+        institution {
+                name="inst_name"
+                config{
+                        % define institution here
+                       }
+        }
+        institution {
+                name="inst_name"
+                config{
+                        % define institution here
+                       }
+        }
+    }
+    region {
+        name="region_name"
+        config {
+                % there can be multiple regions
+                }
+        institution {
+                name="inst_name"
+                initialfacilitylist {
+                    entry={
+                        number=1
+                        prototype=proto
+                                             }
+                                     }
+                config{
+                        % define institution here
+                       }
+        }
+        institution {
+                name="inst_name"
+                initialfacilitylist {
+                    entry={
+                        number=1
+                        prototype=proto
+                                             }
+                                     }
+                config{
+                        % define institution here
+                       }
+        }
+    }
 
     
-    with open(args.output, "w") as sch_file:
-        sch_file.write(serialized_string)
+    recipe {
+        % this is an example
+        basis="mass"
+        name="natl_u"
+        nuclide={comp=0.997 id="u238"}
+        nuclide={comp=0.003 id="u235"}
+    }
+}"""
+
+    facility_template= """facility {
+        name="facility_name"
+        config {
+                % autocomplete here
+                }     
+    }"""
+    
+    recipe_template="""recipe {
+        % this is an example
+        basis="mass"
+        name="natl_u"
+        nuclide={comp=0.997 id="u238"}
+        nuclide={comp=0.003 id="u235"}
+    }"""
+    
+    region_template = """    region {
+        name="region_name"
+        config {
+                % there can be multiple regions
+                }
+        institution {
+                name="inst_name"
+                initialfacilitylist {
+                    entry={
+                        number=1
+                        prototype=proto
+                                             }
+                                     }
+                config{
+                        % define institution here
+                       }
+        }
+    }"""
+    
+    institution_template = """institution {
+        name="inst_name"
+        config{
+                % define institution here
+                }
+        }"""
+    
+    with open(template_dir+'/init_template.tmpl','w') as f:
+        f.write(init_template_string)
+    with open(template_dir+'/facility.tmpl','w') as f:
+        f.write(facility_template)
+    with open(template_dir+'/recipe.tmpl','w') as f:
+        f.write(recipe_template)
+    with open(template_dir+'/region.tmpl','w') as f:
+        f.write(region_template)
+    with open(template_dir+'/institution.tmpl','w') as f:
+        f.write(institution_template)
+    
+    generate_cyclus_workbench_files(args.path, etc_dir, cyclus_cmd=cyclus_cmd)
 
 # These following lines create the templates and save them in a folder named "Templates"
 save_template_for_all_schemas(processed_facilities, cyclus_metadata["annotations"])
