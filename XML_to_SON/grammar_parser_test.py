@@ -211,32 +211,13 @@ def process_schema_from_mjson(xml_string, element_name):
     return {element_name: processed_content}
 
 def integrate_detailed_schemas(final_json, processed_facilities, processed_regions, processed_institutions):
-    for facility_name, facility_config in processed_facilities.items():
-        if "facility" in final_json["simulation"] and facility_name in final_json["simulation"]["facility"]["config"]["ChildAtMostOne"]:
-            new_facility_config = {
-                "InputTmpl": '"' + facility_name + '"',  
-                "MaxOccurs": 1                          
-            }
-            new_facility_config.update(facility_config)
-            final_json["simulation"]["facility"]["config"][facility_name] = new_facility_config
-
-    for region_name, region_config in processed_regions.items():
-        if "region" in final_json["simulation"] and region_name in final_json["simulation"]["region"]["config"]["ChildAtMostOne"]:
-            new_region_config = {
-                "InputTmpl": '"' + region_name + '"',   
-                "MaxOccurs": 1                          
-            }
-            new_region_config.update(region_config)
-            final_json["simulation"]["region"]["config"][region_name] = new_region_config
-
-    for institution_name, institution_config in processed_institutions.items():
-        if "region" in final_json["simulation"] and institution_name in final_json["simulation"]["region"]["institution"]["config"]["ChildAtMostOne"]:
-            new_institution_config = {
-                "InputTmpl": '"' + institution_name + '"',  
-                "MaxOccurs": 1                               
-            }
-            new_institution_config.update(institution_config)
-            final_json["simulation"]["region"]["institution"]["config"][institution_name] = new_institution_config
+    for agent_type, agent_list in zip(['facility', 'institution', 'region'], [processed_facilities, processed_institutions, processed_regions]):
+        if agent_type in final_json["simulation"]:
+            for agent_name, agent_config in agent_list.items():
+                if agent_name in final_json["simulation"][agent_type]["config"]["ChildAtMostOne"]:
+                    new_agent_config = {"InputTmpl": f"{agent_name}", "MaxOccurs": 1}
+                    new_agent_config.update(agent_config)
+                    final_json["simulation"][agent_type]["config"][agent_name] = new_agent_config
 
     simulation_dict = final_json["simulation"]
     simulation_dict["MinOccurs"] = 1
@@ -333,7 +314,10 @@ def custom_serialize_for_template(obj, annotations, key_name):
     doc_indent = base_indent + 2 * tab
     child_indent = base_indent + tab
 
-    matching_keys = [key for key in annotations.keys() if key.split(":")[-2] == key_name.split("_")[-3] and key.split(":")[-1] == key_name.split("_")[-1]]
+    cycamore_or_agent = key_name.split("_")[-3]
+    archetype_name = key_name.split("_")[-1]
+
+    matching_keys = [key for key in annotations.keys() if key.split(":")[-2] == cycamore_or_agent and key.split(":")[-1] == archetype_name]
     if not matching_keys:
         print(f"DEBUG: No matching keys found for key_name: {key_name}")
         print(f"DEBUG: Available keys in annotations: {list(annotations.keys())}")
