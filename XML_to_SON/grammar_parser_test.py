@@ -211,13 +211,19 @@ def process_schema_from_mjson(xml_string, element_name):
     return {element_name: processed_content}
 
 def integrate_detailed_schemas(final_json, processed_facilities, processed_regions, processed_institutions):
-    for agent_type, agent_list in zip(['facility', 'institution', 'region'], [processed_facilities, processed_institutions, processed_regions]):
+    for agent_type, agent_list in zip(['facility', 'region'], [processed_facilities, processed_regions]):
         if agent_type in final_json["simulation"]:
             for agent_name, agent_config in agent_list.items():
                 if agent_name in final_json["simulation"][agent_type]["config"]["ChildAtMostOne"]:
                     new_agent_config = {"InputTmpl": f"{agent_name}", "MaxOccurs": 1}
                     new_agent_config.update(agent_config)
                     final_json["simulation"][agent_type]["config"][agent_name] = new_agent_config
+                    
+    for institution_name, institution_config in processed_institutions.items():
+        if "region" in final_json["simulation"] and institution_name in final_json["simulation"]["region"]["institution"]["config"]["ChildAtMostOne"]:
+            new_institution_config = {"InputTmpl": '"' + institution_name + '"'}
+            new_institution_config.update(institution_config)
+            final_json["simulation"]["region"]["institution"]["config"][institution_name] = new_institution_config
 
     simulation_dict = final_json["simulation"]
     simulation_dict["MinOccurs"] = 1
@@ -255,32 +261,36 @@ def custom_serialize(obj, key_name="simulation", indent_size=0):
 
     return "\n".join(lines)
 
-def resolve_reference(value, annotations):
-    # Currently working on this function and the following. 
-    # This function helps getting around the fact that elements like Mixer have variables set equal
-    # To a string ("in_streams": "streams_", in the metadata). Solution has not been found before this PR.  
-    while isinstance(value, str):
-        reference_key = value
-        if reference_key in annotations:
-            value = annotations[reference_key]
-            print(f"Resolved '{reference_key}' to: {value} (type: {type(value)})")
-        else:
-            print(f"Warning: Reference key '{reference_key}' not found in annotations.")
-            return None
-
-    if not isinstance(value, dict):
-        print(f"Warning: Expected dictionary after resolving references, but found {type(value).__name__}.")
-        return None
-    return value
-
-def generate_doc_lines_for_key(key, value, annotations, annotation_key, doc_indent, child_indent):
-    # Still in progress to work with nested structures
+def generate_doc_lines_for_key(key, value, annotations, schema_data, annotation_key, doc_indent, child_indent):
     lines = []
-    
-    if isinstance(value, dict):
-        value = resolve_reference(value, annotations)
-    else:
-        lines.append(f"{child_indent}{key} =\n")
+
+    if key in ['MinOccurs', 'MaxOccurs']:
+        return lines
+
+    if isinstance(value, dict) and 'val' in value:
+        var_info = annotations.get(annotation_key, {}).get('vars', {}).get(key, {})
+        optional = " (optional)" if value.get("MinOccurs", 1) == 0 else ""
+        val_type = value.get('ValType', var_info.get('type', 'Unknown'))
+        type_str = f"[{val_type}]"
+        var_doc = var_info.get('doc', 'No documentation available')
+
+        doc_lines = [f"% {optional} {type_str} {line}".strip() for line in var_doc.split('\n')]
+        lines.extend([f"{doc_indent}{line}" for line in doc_lines])
+
+        default_val = var_info.get('default', "")
+
+        lines.append(f"{child_indent}{key} {{val = {default_val}}}\n")
+        return lines
+
+    if isinstance(value, dict) and any(isinstance(v, dict) for v in value.values()):
+        lines.append(f"{child_indent}{key} {{\n")
+
+        inner_indent = child_indent + "    "
+        for sub_key, sub_value in value.items():
+            nested_lines = generate_doc_lines_for_key(sub_key, sub_value, annotations, schema_data, annotation_key, doc_indent, inner_indent)
+            lines.extend(nested_lines)
+
+        lines.append(f"{child_indent}}}\n") 
         return lines
 
     annotation_namespace = annotations.get(annotation_key, {})
@@ -288,25 +298,21 @@ def generate_doc_lines_for_key(key, value, annotations, annotation_key, doc_inde
     if not isinstance(var_info, dict):
         var_info = {}
 
-    optional = " (optional)" if value.get("MinOccurs", 1) == 0 else ""
-    val_type = value.get('ValType', var_info.get('type', 'Unknown'))
+    optional = " (optional)" if isinstance(value, dict) and value.get("MinOccurs", 1) == 0 else ""
+    val_type = value.get('ValType', var_info.get('type', 'Unknown')) if isinstance(value, dict) else 'Unknown'
     type_str = f"[{val_type}]"
     var_doc = var_info.get('doc', 'No documentation available')
 
-    doc_lines = [f'%{optional} {type_str} {line}' for line in var_doc.split('\n')]
+    doc_lines = [f"% {optional} {type_str} {line}".strip() for line in var_doc.split('\n')]
     lines.extend([f"{doc_indent}{line}" for line in doc_lines])
 
     default_val = var_info.get('default', None)
     default_str = f" = {default_val}" if default_val is not None else " ="
 
-    if 'val' in value:
-        lines.append(f"{child_indent}{key} {{val{default_str}}}\n")
-    else:
-        lines.append(f"{child_indent}{key}{default_str}\n")
-
+    lines.append(f"{child_indent}{key}{default_str}\n")
     return lines
 
-def custom_serialize_for_template(obj, annotations, key_name):
+def custom_serialize_for_template(obj, annotations, schema_data, key_name):
     lines = []
     indent_size = 0
     tab = 4 * " "
@@ -316,34 +322,30 @@ def custom_serialize_for_template(obj, annotations, key_name):
 
     cycamore_or_agent = key_name.split("_")[-3]
     archetype_name = key_name.split("_")[-1]
-
     matching_keys = [key for key in annotations.keys() if key.split(":")[-2] == cycamore_or_agent and key.split(":")[-1] == archetype_name]
+    
     if not matching_keys:
         print(f"DEBUG: No matching keys found for key_name: {key_name}")
         print(f"DEBUG: Available keys in annotations: {list(annotations.keys())}")
         return None
 
     annotation_key = matching_keys[0]
-    
     doc_string = annotations.get(annotation_key, {}).get('doc', 'No documentation available')
     doc_lines = [f'% {line}' for line in doc_string.split('\n')] + ['']
     lines.extend(doc_lines)
     lines.append(f'{base_indent}{key_name} {{')
 
-    if annotation_key:
-        for key, value in obj.items():
-            lines.extend(generate_doc_lines_for_key(key, value, annotations, annotation_key, doc_indent, child_indent))
-    else:
-        print(f"No annotation key found for {key_name}")
-        
+    for key, value in obj.items():
+        lines.extend(generate_doc_lines_for_key(key, value, annotations, schema_data, annotation_key, doc_indent, child_indent))
+
     lines.append(f'{base_indent}}}')
     lines.append('')
 
     return "\n".join(lines)
 
-def save_template_for_all_schemas(processed_schemas, annotations):
+def save_template_for_all_schemas(processed_schemas, annotations, schema_data, template_dir="templates"):
     for key_name, schema_contents in processed_schemas.items():
-        template_string = custom_serialize_for_template(schema_contents, annotations, key_name)
+        template_string = custom_serialize_for_template(schema_contents, annotations, schema_data, key_name)
         if template_string:
             filename = f"{template_dir}/{key_name}.tmpl"
             with open(filename, "w") as file:
@@ -666,6 +668,6 @@ if __name__ == "__main__":
     generate_cyclus_workbench_files(args.path, etc_dir, cyclus_cmd=cyclus_cmd)
 
 # These following lines create the templates and save them in a folder named "Templates"
-save_template_for_all_schemas(processed_facilities, cyclus_metadata["annotations"])
-save_template_for_all_schemas(processed_regions, cyclus_metadata["annotations"])
-save_template_for_all_schemas(processed_institutions, cyclus_metadata["annotations"])
+save_template_for_all_schemas(processed_facilities, cyclus_metadata["annotations"], final_result_detailed_schemas["simulation"], template_dir)
+save_template_for_all_schemas(processed_regions, cyclus_metadata["annotations"], final_result_detailed_schemas["simulation"],template_dir)
+save_template_for_all_schemas(processed_institutions, cyclus_metadata["annotations"], final_result_detailed_schemas["simulation"],template_dir)
