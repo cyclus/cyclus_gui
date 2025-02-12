@@ -5,6 +5,7 @@ import os.path
 import argparse
 import re
 import os
+import shutil
 
 processed_facilities = {}
 processed_regions = {}
@@ -25,33 +26,44 @@ class highlighter:
                          'yellow': [255, 255, 0],
                          'cyan': [0, 255, 255],
                          'magenta': [255, 0, 255],
-                         'silver': [192, 192, 192]}
+                         'silver': [192, 192, 192],
+                         'orange': [255, 130, 0], 
+                         'olive': [0, 128, 0]}
         self.highlight_str = self.make_basic_son() 
 
-    def highlight_maker(self, name, word, color='blue'):
+    def highlight_maker(self, name, word, bold = False, italic = False, background = False, alpha = 10, color='blue'):
         s = f"""rule("{name}") {{
 pattern = "{word}"
-bold = true
+bold = {bold}
+italic = {italic}
 foreground {{
     red = {self.rgb_dict[color][0]}
     green = {self.rgb_dict[color][1]}
     blue = {self.rgb_dict[color][2]}
+}}       
+        """
+        if background != False:
+            s += f"""background {{
+    red = {self.rgb_dict[background][0]}
+    green = {self.rgb_dict[background][1]}
+    blue = {self.rgb_dict[background][2]}
+    alpha = {alpha}
 }}
-}}
-
+"""
+        s += """}
         """
         return s
     
     def make_basic_son(self):
         highlight_str = ''
         for i in highlighter_items:
-            highlight_str += self.highlight_maker(i, i)
-        # highlight_str += highlight_maker('brack_open', '{', 'red')
-        # highlight_str += highlight_maker('brack_close', '}', 'red')
-        # highlight_str += highlight_maker('square_open', '[', 'lime')
-        # highlight_str += highlight_maker('square_close', ']', 'lime')
+            highlight_str += self.highlight_maker(i, i, bold=True)
+        highlight_str += self.highlight_maker('equal', "=" , background = 'silver', color='black', alpha=150)
+        highlight_str += self.highlight_maker('Comment', "%.*" , color = 'olive', italic=True)
+        # The next line (rule for Quoted String) was hardcoded as it was very intricate to handle quotation marks. 
+        # The highlighter is only valid if the pattern appears exactly as below (no more or less quotation marks).
         highlight_str += '''rule("Quoted string") {
-pattern = """'[^']*'|"[^"]*""""
+pattern = """'[^']*'|"[^"]*"""" 
 bold = true
 foreground {
     red = 255
@@ -64,28 +76,7 @@ background {
     blue = 0
     alpha = 25
     }
-}
-
-rule("equal"){
-pattern="="
-background{
-    red=192
-    green=192
-    blue=192
-    }
-}
-
-rule("Comment") {
-    pattern = "%.*"
-    italic = true
-    foreground {
-        red = 0
-        green = 128
-        blue = 0
-    }
-}
-
-'''
+}'''
         return highlight_str
 
 def get_element_type(node):
@@ -167,16 +158,16 @@ def process_node(node, add_attrib={}):
 
     return node_dict
 
-def generate_child_exactly_one_line(entity_type):
-    if entity_type == "facility":
-        options = facilities
-    elif entity_type == "region":
-        options = regions
-    elif entity_type == "institution":
-        options = institutions
-    else:
-        options = []
-    return f"ChildAtMostOne=[{'|'.join(options)}]"
+def replace_text (text):
+    if text.startswith("@Facility"):
+        list = facilities
+    elif text.startswith("@Region"):
+        list = regions
+    elif text.startswith("@Inst"):
+        list = institutions
+    replacement_text = f"ChildAtMostOne=[{'|'.join(list)}]"
+    text = text.replace(text,replacement_text)
+    return list
 
 def handle_choice_element(node):
     choices = []
@@ -188,19 +179,10 @@ def handle_choice_element(node):
             choices.append(formatted_name)
             processed_choices.update(process_node(child, {}))
     
-    if node.text:
-        if '@Facility_REFS@' in node.text:
-            replacement_text = generate_child_exactly_one_line('facility')
-            node.text = node.text.replace('@Facility_REFS@', replacement_text)
-            return f"[{' '.join(facilities)}]", {}
-        elif '@Region_REFS@' in node.text:
-            replacement_text = generate_child_exactly_one_line('region')
-            node.text = node.text.replace('@Region_REFS@', replacement_text)
-            return f"[{' '.join(regions)}]", {}
-        elif '@Inst_REFS@' in node.text:
-            replacement_text = generate_child_exactly_one_line('institution')
-            node.text = node.text.replace('@Inst_REFS@', replacement_text)
-            return f"[{' '.join(institutions)}]", {}
+    if node.text.split() != []:
+        text = ''.join(node.text.split())
+        list = replace_text(text)  
+        return f"[{' '.join(list)}]", {}
         
     choice_str = f"[{' '.join(choices)}]" if choices else ""
     return choice_str, processed_choices
@@ -211,7 +193,7 @@ def process_schema_from_mjson(xml_string, element_name):
     return {element_name: processed_content}
 
 def integrate_detailed_schemas(final_json, processed_facilities, processed_regions, processed_institutions):
-    for agent_type, agent_list in zip(['facility', 'region'], [processed_facilities, processed_regions]):
+    for agent_type, agent_list in [ ('facility', processed_facilities), ('region', processed_regions) ]:
         if agent_type in final_json["simulation"]:
             for agent_name, agent_config in agent_list.items():
                 if agent_name in final_json["simulation"][agent_type]["config"]["ChildAtMostOne"]:
@@ -530,7 +512,9 @@ if __name__ == "__main__":
     create_templates_for_missing_nodes(final_result_detailed_schemas, template_dir)
     
     init_template_string= """simulation{
-
+        
+    % autocompletion can be used to call extra copies of commodity, facility, region, and recipe
+    
     control {
         duration = 1234
         startmonth = 1
@@ -563,49 +547,14 @@ if __name__ == "__main__":
                 name="inst_name"
                 config{
                         % define institution here
+                        % autocomplete here
                        }
         }
-        institution {
-                name="inst_name"
-                config{
-                        % define institution here
-                       }
-        }
+        % More institutions can be called through autocomplete
     }
-    region {
-        name="region_name"
-        config {
-                % there can be multiple regions
-                }
-        institution {
-                name="inst_name"
-                initialfacilitylist {
-                    entry={
-                        number=1
-                        prototype=proto
-                                             }
-                                     }
-                config{
-                        % define institution here
-                       }
-        }
-        institution {
-                name="inst_name"
-                initialfacilitylist {
-                    entry={
-                        number=1
-                        prototype=proto
-                                             }
-                                     }
-                config{
-                        % define institution here
-                       }
-        }
-    }
-
     
     recipe {
-        % this is an example
+        
         basis="mass"
         name="natl_u"
         nuclide={comp=0.997 id="u238"}
@@ -664,6 +613,9 @@ if __name__ == "__main__":
         f.write(region_template)
     with open(template_dir+'/institution.tmpl','w') as f:
         f.write(institution_template)
+        
+    here = os.path.dirname(os.path.abspath(__file__))
+    shutil.copyfile(os.path.join(here, 'cyclus.py'), os.path.join(args.path, 'cyclus.py'))
     
     generate_cyclus_workbench_files(args.path, etc_dir, cyclus_cmd=cyclus_cmd)
 
